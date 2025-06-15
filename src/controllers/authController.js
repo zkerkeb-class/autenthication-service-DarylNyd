@@ -240,15 +240,46 @@ exports.resetPassword = async (req, res) => {
 // Get current user
 exports.getCurrentUser = async (req, res) => {
     try {
+        console.log('Getting current user for ID:', req.user.id);
+        
+        if (!req.user || !req.user.id) {
+            console.error('No user ID in request');
+            return res.status(401).json({
+                message: 'User not authenticated',
+                error: 'Missing user ID'
+            });
+        }
+
         const user = await DatabaseService.findUserById(req.user.id);
-        // Remove sensitive data
-        delete user.password;
-        delete user.refreshToken;
-        res.json(user);
+        
+        if (!user) {
+            console.error('User not found in database:', req.user.id);
+            return res.status(404).json({
+                message: 'User not found',
+                error: 'User does not exist'
+            });
+        }
+
+        // Create a safe copy of user data
+        const safeUser = {
+            id: user._id,
+            username: user.username,
+            email: user.email,
+            role: user.role,
+            profile: user.profile || {},
+            emailVerified: user.emailVerified || false,
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt
+        };
+
+        console.log('Successfully retrieved user data for:', safeUser.id);
+        res.json(safeUser);
     } catch (error) {
+        console.error('Error in getCurrentUser:', error);
         res.status(500).json({
             message: 'Error fetching user data',
-            error: error.message
+            error: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 }; 

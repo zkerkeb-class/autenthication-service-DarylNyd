@@ -13,13 +13,37 @@ class DatabaseService {
         }
     }
 
-    static async findUserById(userId) {
+    static async findUserById(id) {
         try {
-            const response = await axios.get(`${DB_SERVICE_URL}/users/${userId}`);
+            console.log('Finding user by ID:', id);
+            const response = await axios.get(`${DB_SERVICE_URL}/users/${id}`);
+            
+            if (!response.data) {
+                console.error('No user data returned for ID:', id);
+                throw new Error('User not found');
+            }
+            
+            console.log('User found:', { id: response.data._id, email: response.data.email });
             return response.data;
         } catch (error) {
-            console.error('Error finding user:', error);
-            throw error;
+            console.error('Error finding user by ID:', error);
+            if (error.response) {
+                // The request was made and the server responded with a status code
+                // that falls out of the range of 2xx
+                console.error('Database service error response:', {
+                    status: error.response.status,
+                    data: error.response.data
+                });
+                throw new Error(error.response.data.message || 'Error fetching user data');
+            } else if (error.request) {
+                // The request was made but no response was received
+                console.error('No response from database service');
+                throw new Error('Database service unavailable');
+            } else {
+                // Something happened in setting up the request that triggered an Error
+                console.error('Error setting up request:', error.message);
+                throw error;
+            }
         }
     }
 

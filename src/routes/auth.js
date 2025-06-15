@@ -39,4 +39,14 @@ router.get('/facebook/callback',
     }
 );
 
+// Health check endpoint
+router.get('/health', (req, res) => {
+    res.json({
+        status: 'ok',
+        service: 'auth-service',
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development'
+    });
+});
+
 module.exports = router; 
