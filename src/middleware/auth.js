@@ -2,7 +2,6 @@ const passport = require('passport');
 const JwtStrategy = require('passport-jwt').Strategy;
 const ExtractJwt = require('passport-jwt').ExtractJwt;
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const FacebookStrategy = require('passport-facebook').Strategy;
 const DatabaseService = require('../services/dbService');
 
 // Debug logging
@@ -41,23 +40,84 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         callbackURL: "/auth/google/callback"
     }, async (accessToken, refreshToken, profile, done) => {
         try {
-            let user = await DatabaseService.findUserBySocialId('google', profile.id);
+            // Validate profile data
+            if (!profile || !profile.id) {
+                console.error('Invalid Google profile data');
+                return done(new Error('Invalid profile data from Google'), false);
+            }
+
+            if (!profile.emails || !profile.emails[0] || !profile.emails[0].value) {
+                console.error('No email found in Google profile');
+                return done(new Error('Email is required for registration'), false);
+            }
+
+            const email = profile.emails[0].value;
+            const socialId = profile.id;
+
+            // First, try to find user by social ID
+            let user = await DatabaseService.findUserBySocialId('google', socialId);
 
             if (!user) {
-                user = await DatabaseService.createUser({
-                    username: `google_${profile.id}`,
-                    email: profile.emails[0].value,
-                    socialLogin: {
-                        provider: 'google',
-                        socialId: profile.id,
-                        accessToken
-                    },
-                    profile: {
-                        name: profile.displayName,
-                        avatar: profile.photos[0].value
-                    },
-                    emailVerified: true
-                });
+                // User not found by social ID, check if user exists with same email
+                try {
+                    user = await DatabaseService.findUserByEmail(email);
+                    
+                    if (user) {
+                        // User exists but doesn't have Google social login
+                        // Update the user to add Google social login
+                        const updateData = {
+                            socialLogin: {
+                                provider: 'google',
+                                socialId: socialId,
+                                accessToken: accessToken
+                            },
+                            emailVerified: true
+                        };
+                        
+                        // Update profile if not already set
+                        if (!user.profile || !user.profile.name) {
+                            updateData.profile = {
+                                name: profile.displayName || 'Google User',
+                                avatar: profile.photos && profile.photos[0] ? profile.photos[0].value : null
+                            };
+                        }
+                        
+                        user = await DatabaseService.updateUser(user._id, updateData);
+                        console.log('Updated existing user with Google social login:', user.email);
+                    } else {
+                        // Create new user
+                        const username = profile.displayName 
+                            ? profile.displayName.replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase()
+                            : `user_${socialId}`;
+
+                        user = await DatabaseService.createUser({
+                            username,
+                            email: email,
+                            socialLogin: {
+                                provider: 'google',
+                                socialId: socialId,
+                                accessToken: accessToken
+                            },
+                            profile: {
+                                name: profile.displayName || 'Google User',
+                                avatar: profile.photos && profile.photos[0] ? profile.photos[0].value : null
+                            },
+                            emailVerified: true
+                        });
+                        console.log('Created new user with Google social login:', user.email);
+                    }
+                } catch (createError) {
+                    console.error('Error creating/updating user for Google OAuth:', createError);
+                    if (createError.message === 'User already exists') {
+                        // Try to find the user again in case of race condition
+                        user = await DatabaseService.findUserByEmail(email);
+                        if (!user) {
+                            return done(new Error('Failed to create or find user account'), false);
+                        }
+                    } else {
+                        return done(createError, false);
+                    }
+                }
             }
 
             return done(null, user);
@@ -66,42 +126,8 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
             return done(error, false);
         }
     }));
-}
-
-// Facebook Strategy (only if credentials are provided)
-if (process.env.FACEBOOK_APP_ID && process.env.FACEBOOK_APP_SECRET) {
-    passport.use(new FacebookStrategy({
-        clientID: process.env.FACEBOOK_APP_ID,
-        clientSecret: process.env.FACEBOOK_APP_SECRET,
-        callbackURL: "/auth/facebook/callback",
-        profileFields: ['id', 'emails', 'name', 'picture']
-    }, async (accessToken, refreshToken, profile, done) => {
-        try {
-            let user = await DatabaseService.findUserBySocialId('facebook', profile.id);
-
-            if (!user) {
-                user = await DatabaseService.createUser({
-                    username: `fb_${profile.id}`,
-                    email: profile.emails[0].value,
-                    socialLogin: {
-                        provider: 'facebook',
-                        socialId: profile.id,
-                        accessToken
-                    },
-                    profile: {
-                        name: `${profile.name.givenName} ${profile.name.familyName}`,
-                        avatar: profile.photos[0].value
-                    },
-                    emailVerified: true
-                });
-            }
-
-            return done(null, user);
-        } catch (error) {
-            console.error('Error in Facebook strategy:', error);
-            return done(error, false);
-        }
-    }));
+} else {
+    console.warn('Google OAuth credentials not provided - Google login disabled');
 }
 
 // Serialize user for the session

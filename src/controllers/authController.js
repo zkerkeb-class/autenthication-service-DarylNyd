@@ -2,22 +2,60 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const DatabaseService = require('../services/dbService');
+const EmailService = require('../services/emailService');
 
-// Generate JWT Token
+// Input validation helper
+const validateEmail = (email) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+};
+
+const validatePassword = (password) => {
+    // At least 8 characters, 1 uppercase, 1 lowercase, 1 number
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d@$!%*?&]{8,}$/;
+    return passwordRegex.test(password);
+};
+
+const validateUsername = (username) => {
+    // 3-20 characters, alphanumeric and underscores only
+    const usernameRegex = /^[a-zA-Z0-9_]{3,20}$/;
+    return usernameRegex.test(username);
+};
+
+// Generate JWT Token with enhanced security
 const generateToken = (user) => {
     return jwt.sign(
-        { id: user._id, role: user.role },
+        { 
+            id: user._id, 
+            role: user.role,
+            iat: Math.floor(Date.now() / 1000),
+            jti: crypto.randomBytes(16).toString('hex')
+        },
         process.env.JWT_SECRET,
-        { expiresIn: '24h' }
+        { 
+            expiresIn: '24h',
+            algorithm: 'HS256',
+            issuer: 'nydart-advisor',
+            audience: 'nydart-users'
+        }
     );
 };
 
-// Generate Refresh Token
+// Generate Refresh Token with enhanced security
 const generateRefreshToken = (user) => {
     return jwt.sign(
-        { id: user._id },
+        { 
+            id: user._id,
+            iat: Math.floor(Date.now() / 1000),
+            jti: crypto.randomBytes(16).toString('hex')
+        },
         process.env.JWT_REFRESH_SECRET,
-        { expiresIn: '7d' }
+        { 
+            expiresIn: '7d',
+            algorithm: 'HS256',
+            issuer: 'nydart-advisor',
+            audience: 'nydart-users'
+        }
     );
 };
 
@@ -32,6 +70,31 @@ exports.register = async (req, res) => {
     try {
         const { username, email, password } = req.body;
 
+        // Input validation
+        if (!username || !email || !password) {
+            return res.status(400).json({
+                message: 'Username, email, and password are required'
+            });
+        }
+
+        if (!validateUsername(username)) {
+            return res.status(400).json({
+                message: 'Username must be 3-20 characters long and contain only letters, numbers, and underscores'
+            });
+        }
+
+        if (!validateEmail(email)) {
+            return res.status(400).json({
+                message: 'Please provide a valid email address'
+            });
+        }
+
+        if (!validatePassword(password)) {
+            return res.status(400).json({
+                message: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number'
+            });
+        }
+
         // Check if user already exists
         try {
             await DatabaseService.findUserByEmail(email);
@@ -40,6 +103,16 @@ exports.register = async (req, res) => {
             });
         } catch (error) {
             // User not found, continue with registration
+        }
+
+        // Check if username already exists
+        try {
+            await DatabaseService.findUserByUsername(username);
+            return res.status(400).json({
+                message: 'Username already taken'
+            });
+        } catch (error) {
+            // Username not found, continue with registration
         }
 
         // Hash password
@@ -71,9 +144,10 @@ exports.register = async (req, res) => {
             }
         });
     } catch (error) {
+        console.error('Registration error:', error);
         res.status(500).json({
             message: 'Error registering user',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
         });
     }
 };
@@ -83,10 +157,28 @@ exports.login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
+        // Input validation
+        if (!email || !password) {
+            return res.status(400).json({
+                message: 'Email and password are required'
+            });
+        }
+
+        if (!validateEmail(email)) {
+            return res.status(400).json({
+                message: 'Please provide a valid email address'
+            });
+        }
+
         // Find user
         const user = await DatabaseService.findUserByEmail(email);
         if (!user) {
             return res.status(401).json({ message: 'Invalid credentials' });
+        }
+
+        // Check if user is active (with backward compatibility)
+        if (user.status && user.status !== 'active') {
+            return res.status(401).json({ message: 'Account is not active' });
         }
 
         // Check password
@@ -112,13 +204,14 @@ exports.login = async (req, res) => {
                 id: user._id,
                 username: user.username,
                 email: user.email,
-                role: user.role
+                role: user.role || 'user'
             }
         });
     } catch (error) {
+        console.error('Login error:', error);
         res.status(500).json({
             message: 'Error logging in',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
         });
     }
 };
@@ -140,6 +233,11 @@ exports.refreshToken = async (req, res) => {
             return res.status(401).json({ message: 'Invalid refresh token' });
         }
 
+        // Check if user is active (with backward compatibility)
+        if (user.status && user.status !== 'active') {
+            return res.status(401).json({ message: 'Account is not active' });
+        }
+
         // Generate new tokens
         const newToken = generateToken(user);
         const newRefreshToken = generateRefreshToken(user);
@@ -152,6 +250,7 @@ exports.refreshToken = async (req, res) => {
             refreshToken: newRefreshToken
         });
     } catch (error) {
+        console.error('Refresh token error:', error);
         res.status(401).json({ message: 'Invalid refresh token' });
     }
 };
@@ -162,9 +261,10 @@ exports.logout = async (req, res) => {
         await DatabaseService.updateUser(req.user.id, { refreshToken: null });
         res.json({ message: 'Logged out successfully' });
     } catch (error) {
+        console.error('Logout error:', error);
         res.status(500).json({
             message: 'Error logging out',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
         });
     }
 };
@@ -173,10 +273,20 @@ exports.logout = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
+
+        if (!email || !validateEmail(email)) {
+            return res.status(400).json({
+                message: 'Please provide a valid email address'
+            });
+        }
+
         const user = await DatabaseService.findUserByEmail(email);
 
         if (!user) {
-            return res.status(404).json({ message: 'User not found' });
+            // Don't reveal if user exists or not
+            return res.json({
+                message: 'If an account with that email exists, password reset instructions have been sent'
+            });
         }
 
         const resetToken = crypto.randomBytes(32).toString('hex');
@@ -190,17 +300,22 @@ exports.forgotPassword = async (req, res) => {
             passwordResetExpires: Date.now() + 3600000 // 1 hour
         });
 
-        // TODO: Send email with reset token
-        // This should be implemented with your email service
+        // Send password reset email
+        try {
+            await EmailService.sendPasswordResetEmail(email, resetToken);
+        } catch (emailError) {
+            console.error('Failed to send password reset email:', emailError);
+            // Don't fail the request if email fails, just log it
+        }
 
         res.json({
-            message: 'Password reset instructions sent to email',
-            resetToken // In production, don't send this in response
+            message: 'If an account with that email exists, password reset instructions have been sent'
         });
     } catch (error) {
+        console.error('Forgot password error:', error);
         res.status(500).json({
             message: 'Error requesting password reset',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
         });
     }
 };
@@ -209,6 +324,18 @@ exports.forgotPassword = async (req, res) => {
 exports.resetPassword = async (req, res) => {
     try {
         const { token, newPassword } = req.body;
+
+        if (!token || !newPassword) {
+            return res.status(400).json({
+                message: 'Token and new password are required'
+            });
+        }
+
+        if (!validatePassword(newPassword)) {
+            return res.status(400).json({
+                message: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number'
+            });
+        }
 
         const hashedToken = crypto
             .createHash('sha256')
@@ -230,9 +357,10 @@ exports.resetPassword = async (req, res) => {
 
         res.json({ message: 'Password reset successful' });
     } catch (error) {
+        console.error('Reset password error:', error);
         res.status(500).json({
             message: 'Error resetting password',
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
         });
     }
 };
@@ -240,9 +368,7 @@ exports.resetPassword = async (req, res) => {
 // Get current user
 exports.getCurrentUser = async (req, res) => {
     try {
-        console.log('Getting current user for ID:', req.user.id);
-        
-        if (!req.user || !req.user.id) {
+        if (!req.user || (!req.user._id && !req.user.id)) {
             console.error('No user ID in request');
             return res.status(401).json({
                 message: 'User not authenticated',
@@ -250,36 +376,41 @@ exports.getCurrentUser = async (req, res) => {
             });
         }
 
-        const user = await DatabaseService.findUserById(req.user.id);
+        // Use _id (MongoDB) or id (fallback)
+        const userId = req.user._id || req.user.id;
+        const user = await DatabaseService.findUserById(userId);
         
         if (!user) {
-            console.error('User not found in database:', req.user.id);
+            console.error('User not found in database:', userId);
             return res.status(404).json({
                 message: 'User not found',
                 error: 'User does not exist'
             });
         }
 
-        // Create a safe copy of user data
+        // Create a safe copy of user data with default values for backward compatibility
         const safeUser = {
             id: user._id,
             username: user.username,
             email: user.email,
-            role: user.role,
+            role: user.role || 'user',
+            status: user.status || 'active',
             profile: user.profile || {},
             emailVerified: user.emailVerified || false,
             createdAt: user.createdAt,
-            updatedAt: user.updatedAt
+            updatedAt: user.updatedAt || user.createdAt
         };
 
-        console.log('Successfully retrieved user data for:', safeUser.id);
         res.json(safeUser);
     } catch (error) {
         console.error('Error in getCurrentUser:', error);
         res.status(500).json({
             message: 'Error fetching user data',
-            error: error.message,
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
             details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
-}; 
+};
+
+// Export generateToken for use in routes
+exports.generateToken = generateToken; 
