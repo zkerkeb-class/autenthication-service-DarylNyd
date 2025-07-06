@@ -58,7 +58,11 @@ const userSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     },
-    updatedAt: Date
+    updatedAt: Date,
+    currentPlan: {
+        type: String,
+        default: 'free'
+    }
 });
 
 // Hash password before saving

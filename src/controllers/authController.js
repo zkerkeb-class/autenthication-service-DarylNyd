@@ -96,23 +96,19 @@ exports.register = async (req, res) => {
         }
 
         // Check if user already exists
-        try {
-            await DatabaseService.findUserByEmail(email);
+        const existingUserByEmail = await DatabaseService.findUserByEmail(email);
+        if (existingUserByEmail) {
             return res.status(400).json({
                 message: 'User already exists with this email'
             });
-        } catch (error) {
-            // User not found, continue with registration
         }
 
         // Check if username already exists
-        try {
-            await DatabaseService.findUserByUsername(username);
+        const existingUserByUsername = await DatabaseService.findUserByUsername(username);
+        if (existingUserByUsername) {
             return res.status(400).json({
                 message: 'Username already taken'
             });
-        } catch (error) {
-            // Username not found, continue with registration
         }
 
         // Hash password
@@ -131,6 +127,55 @@ exports.register = async (req, res) => {
 
         // Update user with refresh token
         await DatabaseService.updateUser(user._id, { refreshToken });
+
+        // Assign free plan in payment service
+        try {
+            const paymentResponse = await fetch('http://localhost:3004/api/subscriptions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    // Optionally, add an internal API key or service token for security
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    planId: 'free',
+                    paymentMethod: 'none'
+                })
+            });
+            if (!paymentResponse.ok) {
+                console.error('Payment service returned error for free plan:', paymentResponse.status, paymentResponse.statusText);
+            } else {
+                const paymentResult = await paymentResponse.json();
+                console.log('Free plan assigned in payment service:', paymentResult);
+            }
+        } catch (paymentError) {
+            console.error('Failed to call payment service for free plan:', paymentError);
+            // Don't fail registration if payment service call fails
+        }
+
+        // Send welcome email to new user
+        try {
+            const loginLink = `${process.env.CLIENT_URL || 'http://localhost:3000'}/login`;
+            const response = await fetch('http://localhost:4003/welcome', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    email, 
+                    username,
+                    loginLink 
+                })
+            });
+
+            if (!response.ok) {
+                console.error('Notification service returned error for welcome email:', response.status, response.statusText);
+            } else {
+                const result = await response.json();
+                console.log('Welcome email sent successfully:', result);
+            }
+        } catch (emailError) {
+            console.error('Failed to call notification service for welcome email:', emailError);
+            // Don't fail the registration if email fails, just log it
+        }
 
         res.status(201).json({
             message: 'User registered successfully',
@@ -258,7 +303,18 @@ exports.refreshToken = async (req, res) => {
 // Logout
 exports.logout = async (req, res) => {
     try {
-        await DatabaseService.updateUser(req.user.id, { refreshToken: null });
+        // Get user ID from JWT token (req.user should be set by auth middleware)
+        const userId = req.user?.id || req.user?._id;
+        
+        if (!userId) {
+            console.error('No user ID found in request for logout');
+            return res.status(401).json({
+                message: 'User not authenticated',
+                error: 'Missing user ID'
+            });
+        }
+
+        await DatabaseService.updateUser(userId, { refreshToken: null });
         res.json({ message: 'Logged out successfully' });
     } catch (error) {
         console.error('Logout error:', error);
@@ -300,11 +356,22 @@ exports.forgotPassword = async (req, res) => {
             passwordResetExpires: Date.now() + 3600000 // 1 hour
         });
 
-        // Send password reset email
+        // Call notification/email service
         try {
-            await EmailService.sendPasswordResetEmail(email, resetToken);
+            const response = await fetch('http://localhost:4003/notify/email/password-reset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, resetToken })
+            });
+
+            if (!response.ok) {
+                console.error('Notification service returned error:', response.status, response.statusText);
+            } else {
+                const result = await response.json();
+                console.log('Password reset email sent successfully:', result);
+            }
         } catch (emailError) {
-            console.error('Failed to send password reset email:', emailError);
+            console.error('Failed to call notification/email service:', emailError);
             // Don't fail the request if email fails, just log it
         }
 
@@ -410,7 +477,30 @@ exports.getCurrentUser = async (req, res) => {
             details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
-};
+}; 
 
 // Export generateToken for use in routes
-exports.generateToken = generateToken; 
+exports.generateToken = generateToken;
+
+// Update user's current plan
+exports.updateUserPlan = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { planId } = req.body;
+        if (!planId) {
+            return res.status(400).json({ message: 'planId is required' });
+        }
+        // Update both currentPlan and subscription.type for compatibility
+        const user = await DatabaseService.updateUser(userId, {
+            currentPlan: planId,
+            'subscription.type': planId
+        });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        res.json({ message: 'User plan updated successfully', user });
+    } catch (error) {
+        console.error('Error updating user plan:', error);
+        res.status(500).json({ message: 'Error updating user plan' });
+    }
+}; 

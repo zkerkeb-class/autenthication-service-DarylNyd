@@ -48,10 +48,11 @@ class DatabaseService {
             return response.data;
         } catch (error) {
             console.error('Error creating user:', error);
-            // Don't throw error for duplicate users (409) - let the caller handle it
+            // Handle duplicate user errors (409) with specific messages
             if (error.response && error.response.status === 409) {
-                console.log('User already exists - this might be a duplicate registration attempt');
-                throw new Error('User already exists');
+                const errorMessage = error.response.data?.message || 'User already exists';
+                console.log('User already exists - duplicate registration attempt:', errorMessage);
+                throw new Error(errorMessage);
             }
             this.handleDatabaseError(error, 'createUser');
         }
@@ -95,6 +96,11 @@ class DatabaseService {
             const response = await axiosInstance.get(`/users/username/${username}`);
             return response.data;
         } catch (error) {
+            // If user not found (404), return null instead of throwing error
+            if (error.response && error.response.status === 404) {
+                console.log(`User not found for username: ${username} - this is expected for new users`);
+                return null;
+            }
             console.error('Error finding user by username:', error);
             this.handleDatabaseError(error, 'findUserByUsername', username);
         }

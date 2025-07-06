@@ -4,9 +4,6 @@ const ExtractJwt = require('passport-jwt').ExtractJwt;
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const DatabaseService = require('../services/dbService');
 
-// Debug logging
-console.log('Initializing authentication middleware with JWT_SECRET:', process.env.JWT_SECRET ? 'Set' : 'Not Set');
-
 // JWT options
 const jwtOptions = {
     jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),

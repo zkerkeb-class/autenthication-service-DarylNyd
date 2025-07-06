@@ -7,27 +7,62 @@ const { passport } = require('./middleware/auth');
 const { generalLimiter } = require('./middleware/rateLimit');
 const authRoutes = require('./routes/auth');
 
-// Debug logging
-console.log('Starting server with environment:', {
-    NODE_ENV: process.env.NODE_ENV,
-    PORT: process.env.PORT,
-    JWT_SECRET: process.env.JWT_SECRET ? 'Set' : 'Not Set',
-    SESSION_SECRET: process.env.SESSION_SECRET ? 'Set' : 'Not Set',
-    CLIENT_URL: process.env.CLIENT_URL
-});
-
 const app = express();
 
 // Apply general rate limiting to all routes
 app.use(generalLimiter);
 
-// Middleware
+// Enhanced CORS configuration
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        
+        const allowedOrigins = [
+            'http://localhost:3000',
+            'http://127.0.0.1:3000',
+            'http://localhost:3001',
+            'http://127.0.0.1:3001'
+        ];
+        
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            console.log('CORS blocked origin:', origin);
+            callback(null, true); // Allow all origins for now
+        }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+    allowedHeaders: [
+        'Content-Type', 
+        'Authorization', 
+        'X-Requested-With',
+        'Accept',
+        'Origin',
+        'Access-Control-Request-Method',
+        'Access-Control-Request-Headers'
+    ],
+    exposedHeaders: ['Content-Length', 'X-Requested-With'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204
 }));
+
+// Add additional headers middleware
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+    } else {
+        next();
+    }
+});
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
