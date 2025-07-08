@@ -6,6 +6,9 @@ const session = require('express-session');
 const { passport } = require('./middleware/auth');
 const { generalLimiter } = require('./middleware/rateLimit');
 const authRoutes = require('./routes/auth');
+const promClient = require('prom-client');
+const register = promClient.register;
+promClient.collectDefaultMetrics({ register });
 
 const app = express();
 
@@ -96,6 +99,12 @@ app.get('/health', (req, res) => {
         environment: process.env.NODE_ENV,
         timestamp: new Date().toISOString()
     });
+});
+
+// Metrics route
+app.get('/metrics', async (req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
 });
 
 // 404 handler
