@@ -6,6 +6,7 @@ const session = require('express-session');
 const { passport } = require('./middleware/auth');
 const { generalLimiter } = require('./middleware/rateLimit');
 const authRoutes = require('./routes/auth');
+const twoFactorRoutes = require('./routes/twoFactorRoutes');
 const promClient = require('prom-client');
 const register = promClient.register;
 promClient.collectDefaultMetrics({ register });
@@ -90,6 +91,7 @@ app.use(passport.session());
 
 // Routes
 app.use('/auth', authRoutes);
+app.use('/two-factor', twoFactorRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {

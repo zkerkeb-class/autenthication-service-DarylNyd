@@ -12,6 +12,7 @@ router.post('/refresh-token', authLimiter, authController.refreshToken);
 router.post('/logout', isAuthenticated, authController.logout);
 router.post('/forgot-password', passwordResetLimiter, authController.forgotPassword);
 router.post('/reset-password', passwordResetLimiter, authController.resetPassword);
+router.post('/change-password', isAuthenticated, authController.changePassword);
 router.get('/me', isAuthenticated, authController.getCurrentUser);
 
 // Google OAuth routes
@@ -81,5 +82,8 @@ router.get('/health', (req, res) => {
 
 // Update user's current plan
 router.patch('/users/:userId/plan', authController.updateUserPlan);
+
+// Update user profile
+router.patch('/profile', isAuthenticated, authController.updateProfile);
 
 module.exports = router; 

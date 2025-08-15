@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const DatabaseService = require('../services/dbService');
 const EmailService = require('../services/emailService');
+const speakeasy = require('speakeasy');
 
 // Input validation helper
 const validateEmail = (email) => {
@@ -68,7 +69,7 @@ const hashPassword = async (password) => {
 // Register new user
 exports.register = async (req, res) => {
     try {
-        const { username, email, password } = req.body;
+        const { username, email, password, phone } = req.body;
 
         // Input validation
         if (!username || !email || !password) {
@@ -95,6 +96,16 @@ exports.register = async (req, res) => {
             });
         }
 
+        // Validate phone number if provided
+        if (phone && phone.number) {
+            const phoneRegex = /^\+[1-9]\d{1,14}$/;
+            if (!phoneRegex.test(phone.number)) {
+                return res.status(400).json({
+                    message: 'Phone number must be in E.164 format (e.g., +1234567890)'
+                });
+            }
+        }
+
         // Check if user already exists
         const existingUserByEmail = await DatabaseService.findUserByEmail(email);
         if (existingUserByEmail) {
@@ -114,12 +125,23 @@ exports.register = async (req, res) => {
         // Hash password
         const hashedPassword = await hashPassword(password);
 
-        // Create new user
-        const user = await DatabaseService.createUser({
+        // Create new user with phone number
+        const userData = {
             username,
             email,
             password: hashedPassword
-        });
+        };
+
+        // Add phone number if provided
+        if (phone && phone.number) {
+            userData.phone = {
+                number: phone.number,
+                countryCode: phone.countryCode || null,
+                verified: false
+            };
+        }
+
+        const user = await DatabaseService.createUser(userData);
 
         // Generate tokens
         const token = generateToken(user);
@@ -230,6 +252,32 @@ exports.login = async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(401).json({ message: 'Invalid credentials' });
+        }
+         // Check if 2FA is enabled
+         if (user.twoFactorEnabled && user.twoFactorSecret) {
+            const { twoFactorCode } = req.body;
+            
+            if (!twoFactorCode) {
+                return res.status(400).json({
+                    message: 'Two-factor authentication code required',
+                    requiresTwoFactor: true
+                });
+            }
+
+            // Verify 2FA code
+            const verified = speakeasy.totp.verify({
+                secret: user.twoFactorSecret,
+                encoding: 'base32',
+                token: twoFactorCode,
+                window: 2
+            });
+
+            if (!verified) {
+                return res.status(401).json({
+                    message: 'Invalid two-factor authentication code',
+                    requiresTwoFactor: true
+                });
+            }
         }
 
         // Generate tokens
@@ -358,7 +406,7 @@ exports.forgotPassword = async (req, res) => {
 
         // Call notification/email service
         try {
-            const response = await fetch('http://localhost:4003/notify/email/password-reset', {
+            const response = await fetch('http://localhost:4003/password-reset', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, resetToken })
@@ -427,6 +475,66 @@ exports.resetPassword = async (req, res) => {
         console.error('Reset password error:', error);
         res.status(500).json({
             message: 'Error resetting password',
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        });
+    }
+};
+
+// Change password
+exports.changePassword = async (req, res) => {
+    try {
+        if (!req.user || (!req.user._id && !req.user.id)) {
+            return res.status(401).json({
+                message: 'User not authenticated',
+                error: 'Missing user ID'
+            });
+        }
+
+        const userId = req.user._id || req.user.id;
+        const { currentPassword, newPassword } = req.body;
+
+        // Validate input
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({
+                message: 'Current password and new password are required'
+            });
+        }
+
+        if (!validatePassword(newPassword)) {
+            return res.status(400).json({
+                message: 'New password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one number'
+            });
+        }
+
+        // Get user
+        const user = await DatabaseService.findUserById(userId);
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Verify current password
+        const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+        if (!isCurrentPasswordValid) {
+            return res.status(400).json({ message: 'Current password is incorrect' });
+        }
+
+        // Check if new password is different from current
+        const isNewPasswordSame = await bcrypt.compare(newPassword, user.password);
+        if (isNewPasswordSame) {
+            return res.status(400).json({ message: 'New password must be different from current password' });
+        }
+
+        // Hash new password
+        const hashedNewPassword = await hashPassword(newPassword);
+
+        // Update password
+        await DatabaseService.updateUser(userId, { password: hashedNewPassword });
+
+        res.json({ message: 'Password changed successfully' });
+    } catch (error) {
+        console.error('Error changing password:', error);
+        res.status(500).json({
+            message: 'Error changing password',
             error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
         });
     }
@@ -502,5 +610,88 @@ exports.updateUserPlan = async (req, res) => {
     } catch (error) {
         console.error('Error updating user plan:', error);
         res.status(500).json({ message: 'Error updating user plan' });
+    }
+};
+
+// Update user profile
+exports.updateProfile = async (req, res) => {
+    try {
+        if (!req.user || (!req.user._id && !req.user.id)) {
+            return res.status(401).json({
+                message: 'User not authenticated',
+                error: 'Missing user ID'
+            });
+        }
+
+        const userId = req.user._id || req.user.id;
+        const { username, email, firstName, lastName, bio, phone } = req.body;
+
+        // Validate input
+        if (username && !validateUsername(username)) {
+            return res.status(400).json({
+                message: 'Username must be 3-20 characters long and contain only letters, numbers, and underscores'
+            });
+        }
+
+        if (email && !validateEmail(email)) {
+            return res.status(400).json({
+                message: 'Please provide a valid email address'
+            });
+        }
+
+        // Validate phone number if provided
+        if (phone && phone.number) {
+            const phoneRegex = /^\+[1-9]\d{1,14}$/;
+            if (!phoneRegex.test(phone.number)) {
+                return res.status(400).json({
+                    message: 'Phone number must be in E.164 format (e.g., +1234567890)'
+                });
+            }
+        }
+
+        // Prepare update data
+        const updateData = {};
+        
+        if (username) updateData.username = username;
+        if (email) updateData.email = email;
+        if (phone) updateData.phone = phone;
+        if (firstName || lastName || bio) {
+            updateData.profile = {};
+            if (firstName) updateData.profile.name = firstName;
+            if (lastName) updateData.profile.name = updateData.profile.name ? `${updateData.profile.name} ${lastName}` : lastName;
+            if (bio) updateData.profile.bio = bio;
+        }
+
+        // Update user
+        const updatedUser = await DatabaseService.updateUser(userId, updateData);
+        
+        if (!updatedUser) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // Return updated user data
+        const safeUser = {
+            id: updatedUser._id,
+            username: updatedUser.username,
+            email: updatedUser.email,
+            role: updatedUser.role || 'user',
+            status: updatedUser.status || 'active',
+            profile: updatedUser.profile || {},
+            phone: updatedUser.phone || {},
+            emailVerified: updatedUser.emailVerified || false,
+            createdAt: updatedUser.createdAt,
+            updatedAt: updatedUser.updatedAt || updatedUser.createdAt
+        };
+
+        res.json({ 
+            message: 'Profile updated successfully', 
+            user: safeUser 
+        });
+    } catch (error) {
+        console.error('Error updating profile:', error);
+        res.status(500).json({
+            message: 'Error updating profile',
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        });
     }
 }; 
