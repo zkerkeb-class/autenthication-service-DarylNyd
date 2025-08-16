@@ -152,7 +152,8 @@ exports.register = async (req, res) => {
 
         // Assign free plan in payment service
         try {
-            const paymentResponse = await fetch('http://localhost:3004/api/subscriptions', {
+            const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL;
+            const paymentResponse = await fetch(`${paymentServiceUrl}/api/subscriptions`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -177,8 +178,9 @@ exports.register = async (req, res) => {
 
         // Send welcome email to new user
         try {
-            const loginLink = `${process.env.CLIENT_URL || 'http://localhost:3000'}/login`;
-            const response = await fetch('http://localhost:4003/welcome', {
+            const loginLink = `${process.env.CLIENT_URL}/login`;
+            const notificationServiceUrl = process.env.NOTIFICATION_SERVICE_URL;
+            const response = await fetch(`${notificationServiceUrl}/welcome`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
@@ -406,7 +408,8 @@ exports.forgotPassword = async (req, res) => {
 
         // Call notification/email service
         try {
-            const response = await fetch('http://localhost:4003/password-reset', {
+            const notificationServiceUrl = process.env.NOTIFICATION_SERVICE_URL;
+            const response = await fetch(`${notificationServiceUrl}/password-reset`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, resetToken })

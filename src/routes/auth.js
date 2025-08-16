@@ -38,8 +38,9 @@ router.get('/google/callback',
             
             if (userCreatedRecently) {
                 try {
-                    const loginLink = `${process.env.CLIENT_URL || 'http://localhost:3000'}/login`;
-                    const response = await fetch('http://localhost:4003/welcome', {
+                    const loginLink = `${process.env.CLIENT_URL}/login`;
+                    const notificationServiceUrl = process.env.NOTIFICATION_SERVICE_URL;
+                    const response = await fetch(`${notificationServiceUrl}/welcome`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ 

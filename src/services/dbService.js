@@ -1,7 +1,7 @@
 const axios = require('axios');
 require('dotenv').config();
 
-const DB_SERVICE_URL = process.env.DB_SERVICE_URL || 'http://localhost:5001/api';
+const DB_SERVICE_URL = process.env.DB_SERVICE_URL;
 
 // Configure axios with timeout and retry logic
 const axiosInstance = axios.create({
